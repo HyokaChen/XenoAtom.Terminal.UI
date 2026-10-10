@@ -2025,7 +2025,11 @@ public sealed partial class TerminalApp : DispatcherObject, IAsyncDisposable, IV
                 buffer.Clear(baseStyle);
                 break;
             case SceneRenderMode.Dirty:
-                buffer.PushClip(dirtyRect);
+                // The clip must not cut a wide glyph in half: ClearCurrentClip clears a 1-cell halo
+                // around continuation cells, and a halo cell outside the clip is cleared but never
+                // repainted, leaving a permanent 1-cell block of the base background.
+                var alignedRect = ExpandDirtyRectAroundWideGlyphs(buffer, dirtyRect);
+                buffer.PushClip(alignedRect);
                 buffer.ClearCurrentClip(baseStyle);
                 break;
             default:
@@ -2052,6 +2056,73 @@ public sealed partial class TerminalApp : DispatcherObject, IAsyncDisposable, IV
                 buffer.PopClip();
             }
         }
+    }
+
+    /// <summary>
+    /// Expands a dirty rectangle so that it does not cut a wide glyph in half.
+    /// </summary>
+    /// <param name="buffer">The buffer holding the previously rendered frame.</param>
+    /// <param name="rect">The dirty rectangle, in cell coordinates.</param>
+    /// <remarks>
+    /// <para>
+    /// <see cref="CellBuffer.ClearCurrentClip"/> deliberately clears a 1-cell halo around continuation
+    /// cells so a partially cleared area does not keep dangling continuation markers. The halo has two
+    /// directions: the lead of a continuation found at the left edge, and the continuation of a lead
+    /// found at the right edge.
+    /// </para>
+    /// <para>
+    /// When the halo cell falls outside the clip it is cleared but never repainted, because only the
+    /// clip region is rendered. The result is a permanent 1-cell block of the base background — black
+    /// on a dark theme, white on a light one — that survives every later frame, since the diff
+    /// renderer believes it already sent that cell. Aligning the rectangle with the glyph boundaries
+    /// puts both halves inside the clip so both are repainted.
+    /// </para>
+    /// </remarks>
+    internal static Rectangle ExpandDirtyRectAroundWideGlyphs(CellBuffer buffer, in Rectangle rect)
+    {
+        if (rect.Width <= 0 || rect.Height <= 0)
+        {
+            return rect;
+        }
+
+        var width = buffer.Width;
+        var cells = buffer.UnsafeCells;
+        var left = rect.X;
+        var right = rect.Right;
+        var top = rect.Y;
+        var bottom = rect.Bottom;
+
+        // Left edge: a continuation at the boundary means its lead sits one column to the left,
+        // outside the rectangle. Pull the edge back so the lead is cleared and repainted too.
+        if (left > 0 && left < width)
+        {
+            for (var y = top; y < bottom; y++)
+            {
+                if (cells[(y * width) + left].IsContinuation)
+                {
+                    left--;
+                    break;
+                }
+            }
+        }
+
+        // Right edge is exclusive: a continuation just past it means the last column inside the
+        // rectangle is a wide lead. Push the edge forward so the continuation is included too.
+        if (right > 0 && right < width)
+        {
+            for (var y = top; y < bottom; y++)
+            {
+                if (cells[(y * width) + right].IsContinuation)
+                {
+                    right++;
+                    break;
+                }
+            }
+        }
+
+        return left == rect.X && right == rect.Right
+            ? rect
+            : new Rectangle(left, top, Math.Max(0, right - left), rect.Height);
     }
 
     private void CollectGraphicsCommands(in Rectangle viewportBounds, DebugOverlayMetrics? metrics)
