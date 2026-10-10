@@ -3,6 +3,7 @@
 // See license.txt file in the project root for full license information.
 
 using XenoAtom.Ansi;
+using XenoAtom.Terminal.UI.Geometry;
 using XenoAtom.Terminal.UI.Rendering;
 
 namespace XenoAtom.Terminal.UI.Hosting;
@@ -53,4 +54,11 @@ public sealed class FullscreenHost : IDisposable
     /// Resets the diff renderer state.
     /// </summary>
     public void Reset() => _renderer.Reset();
+
+    /// <summary>
+    /// Forces the cells inside the specified region to be re-emitted on the next render pass.
+    /// </summary>
+    /// <param name="region">The region in cell coordinates.</param>
+    /// <seealso cref="CellBufferDiffRenderer.InvalidateRegion"/>
+    public void InvalidateRegion(Rectangle region) => _renderer.InvalidateRegion(region);
 }

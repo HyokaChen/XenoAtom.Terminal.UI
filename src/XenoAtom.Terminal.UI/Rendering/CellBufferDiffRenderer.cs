@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using XenoAtom.Ansi;
 using XenoAtom.Terminal.UI;
+using XenoAtom.Terminal.UI.Geometry;
 
 namespace XenoAtom.Terminal.UI.Rendering;
 
@@ -23,6 +24,8 @@ public sealed class CellBufferDiffRenderer : IDisposable
     private bool _lastCursorVisible;
     private int _lastCursorX;
     private int _lastCursorY;
+    private Rectangle _forceRegion;
+    private bool _hasForceRegion;
 
     internal ICellBufferDiffMetricsSink? MetricsSink { get; set; }
 
@@ -39,6 +42,33 @@ public sealed class CellBufferDiffRenderer : IDisposable
         _lastCursorVisible = false;
         _lastCursorX = 0;
         _lastCursorY = 0;
+        _hasForceRegion = false;
+    }
+
+    /// <summary>
+    /// Forces the cells inside the specified region to be re-emitted on the next render pass,
+    /// even when they are identical to the previously emitted frame.
+    /// </summary>
+    /// <param name="region">The region in cell coordinates. Must have a positive width and height.</param>
+    /// <remarks>
+    /// The renderer keeps a single copy of the last emitted frame. When that copy matches the buffer,
+    /// a diff-only render emits nothing. That is wrong when the terminal grid was modified behind the
+    /// renderer's back: for example a terminal IME composition overlay that restores cells without
+    /// their colors, or an external tool writing to the screen. In that situation the application
+    /// buffer is correct but the terminal is not, and only rewriting the region can repair it.
+    /// <para>
+    /// Multiple calls before a render are unioned together. The region is consumed by the next render.
+    /// </para>
+    /// </remarks>
+    public void InvalidateRegion(Rectangle region)
+    {
+        if (region.Width <= 0 || region.Height <= 0)
+        {
+            return;
+        }
+
+        _forceRegion = _hasForceRegion ? Rectangle.Union(_forceRegion, region) : region;
+        _hasForceRegion = true;
     }
 
     /// <inheritdoc />
@@ -108,6 +138,13 @@ public sealed class CellBufferDiffRenderer : IDisposable
         var cursorSuppressed = false;
         ulong currentHyperlink = 0;
 
+        // Cells inside an invalidated region are always treated as changed, so the region is
+        // rewritten even though the buffer is identical to the last emitted frame.
+        bool IsForced(int x, int y) =>
+            _hasForceRegion &&
+            x >= _forceRegion.X && x < _forceRegion.Right &&
+            y >= _forceRegion.Y && y < _forceRegion.Right;
+
         void BeginOutput()
         {
             if (hasOutput)
@@ -147,7 +184,7 @@ public sealed class CellBufferDiffRenderer : IDisposable
             for (var x = 0; x < width; x++)
             {
                 var i = rowIndex + x;
-                if (forceFull || scalars[i] != lastScalars[i] || cells[i] != lastCells[i] || hyperlinks[i] != lastHyperlinks[i])
+                if (forceFull || IsForced(x, y) || scalars[i] != lastScalars[i] || cells[i] != lastCells[i] || hyperlinks[i] != lastHyperlinks[i])
                 {
                     firstChanged = x;
                     break;
@@ -163,7 +200,7 @@ public sealed class CellBufferDiffRenderer : IDisposable
             for (var x = width - 1; x >= firstChanged; x--)
             {
                 var i = rowIndex + x;
-                if (forceFull || scalars[i] != lastScalars[i] || cells[i] != lastCells[i] || hyperlinks[i] != lastHyperlinks[i])
+                if (forceFull || IsForced(x, y) || scalars[i] != lastScalars[i] || cells[i] != lastCells[i] || hyperlinks[i] != lastHyperlinks[i])
                 {
                     lastChanged = x;
                     break;
@@ -243,6 +280,9 @@ public sealed class CellBufferDiffRenderer : IDisposable
                 xPos += Math.Max(1, runeWidth);
             }
         }
+
+        // The invalidated region has been emitted (or was entirely outside the buffer); consume it.
+        _hasForceRegion = false;
 
         if (!anyCellChanges && !cursorChanged && !hasFrameOutput)
         {

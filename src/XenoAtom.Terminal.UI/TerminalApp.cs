@@ -1070,6 +1070,45 @@ public sealed partial class TerminalApp : DispatcherObject, IAsyncDisposable, IV
         RequestRender();
     }
 
+    /// <summary>
+    /// Requests a repaint of a rectangular region of the screen on the next render pass.
+    /// </summary>
+    /// <param name="region">The region in cell coordinates. Must have a positive width and height.</param>
+    /// <remarks>
+    /// Unlike <see cref="RequestFullRender"/>, only the cells inside <paramref name="region"/> are
+    /// rewritten; the rest of the screen is left untouched. Use it to repair a region that was
+    /// overwritten behind the renderer's back (for example by a terminal IME composition overlay that
+    /// restores cells without their colors) without paying for a full-screen repaint or disturbing
+    /// content the terminal is actively drawing.
+    /// <para>
+    /// The region is unioned with any pending dirty rect, so the scene is also re-rendered inside it.
+    /// Multiple calls before a render are unioned together.
+    /// </para>
+    /// </remarks>
+    public void RequestRegionRender(Rectangle region)
+    {
+        VerifyAccess();
+        if (region.Width <= 0 || region.Height <= 0)
+        {
+            return;
+        }
+
+        _fullscreenHost?.InvalidateRegion(region);
+
+        // Re-render the scene inside the region too, so the buffer holds fresh content.
+        if (!_pendingRenderDirtyRectValid)
+        {
+            _pendingRenderDirtyRect = region;
+            _pendingRenderDirtyRectValid = true;
+        }
+        else
+        {
+            _pendingRenderDirtyRect = Rectangle.Union(_pendingRenderDirtyRect, region);
+        }
+
+        RequestRender();
+    }
+
     internal void RequestAnimation()
     {
         _nextAnimationTick = 0;
